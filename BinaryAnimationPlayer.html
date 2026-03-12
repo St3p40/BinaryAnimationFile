@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Binary Animation Player</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            padding: 30px;
+            background: #2c3e50;
+            color: #ecf0f1;
+            display: flex;
+            justify-content: center;
+        }
+        #container {
+            background: #34495e;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            max-width: 500px;
+            width: 100%;
+        }
+        h2 { margin-top: 0; color: #3498db; }
+
+        .control-group {
+            margin-bottom: 15px;
+            background: rgba(0,0,0,0.2);
+            padding: 10px;
+            border-radius: 6px;
+        }
+
+        label { display: block; font-size: 0.8rem; margin-bottom: 5px; color: #bdc3c7; }
+
+        canvas {
+            border: 2px solid #222;
+            image-rendering: pixelated;
+            background: #000;
+            display: block;
+            margin: 20px auto;
+            width: 100%;
+            max-width: 400px;
+            height: auto;
+        }
+
+        .info { font-family: monospace; font-size: 0.9rem; background: #222; padding: 10px; border-radius: 4px; color: #2ecc71; }
+        input[type="file"] { width: 100%; margin-bottom: 10px; }
+        input[type="range"] { width: 100%; }
+    </style>
+</head>
+<body>
+
+<div id="container">
+    <h2>Binary Animation Player</h2>
+
+    <div class="control-group">
+        <label>Select Binary File:</label>
+        <input type="file" id="fileInput" accept="*/*">
+    </div>
+
+    <div class="control-group">
+        <label>Playback Speed (FPS): <span id="fpsVal">10</span></label>
+        <input type="range" id="speedSlider" min="1" max="120" value="10">
+    </div>
+
+    <div class="info" id="status">Waiting for file...</div>
+
+    <canvas id="canvas"></canvas>
+</div>
+
+<script>
+    const fileInput = document.getElementById('fileInput');
+    const status = document.getElementById('status');
+    const canvas = document.getElementById('canvas');
+    const speedSlider = document.getElementById('speedSlider');
+    const fpsVal = document.getElementById('fpsVal');
+    const ctx = canvas.getContext('2d');
+
+    let animationTimer = null;
+    let currentBuffer = null;
+    let meta = { w: 0, h: 0, frames: 0, bpp: 0 };
+
+    speedSlider.oninput = () => {
+        fpsVal.innerText = speedSlider.value;
+        if (currentBuffer) startAnimation(); // Restart with new speed
+    };
+
+    fileInput.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const buffer = await file.arrayBuffer();
+        const view = new DataView(buffer);
+
+        // Header Parsing
+        const w = view.getUint8(0);
+        const h = view.getUint8(1);
+        const frames = view.getUint8(2);
+        const reserved = view.getUint8(3);
+
+        const pixelsPerFrame = w * h;
+        const is565 = file.name.endsWith('.565');
+        const bpp = is565 ? 2 : 1;
+
+        meta = { w, h, frames, bpp, view };
+        currentBuffer = view;
+
+        status.innerHTML = `
+            RES: ${w}x${h} | FRAMES: ${frames}<br>
+            MODE: ${bpp === 1 ? '8-bit RGB332' : '16-bit RGB565'}
+        `;
+
+        canvas.width = w;
+        canvas.height = h;
+        canvas.style.aspectRatio = `${w} / ${h}`;
+
+        startAnimation();
+    };
+
+    function startAnimation() {
+        if (animationTimer) clearInterval(animationTimer);
+
+        let frameIdx = 0;
+        const interval = 1000 / parseInt(speedSlider.value);
+
+        animationTimer = setInterval(() => {
+            renderFrame(frameIdx);
+            frameIdx = (frameIdx + 1) % meta.frames;
+            //console.log(frameIdx);
+        }, interval);
+    }
+
+    function renderFrame(idx) {
+        const { w, h, frames, bpp, view } = meta;
+        const imageData = ctx.createImageData(w, h);
+        const pixelsPerFrame = w * h;
+        idx = idx % frames; // Ensure frame index wraps around
+        const frameOffset = 3 + (idx * pixelsPerFrame * bpp);
+
+        for (let i = 0; i < pixelsPerFrame; i++) {
+            let r, g, b;
+
+            if (bpp === 1) {
+                // 8-bit RGB332
+                const byte = view.getUint8(frameOffset + i);
+                r = byte & 0xe0; // mask out the 3 bits of red at the start of the byte
+                r |= (r >> 3); // extend limited 0-224 range to 0-252
+                r |= (r >> 3); // extend limited 0-252 range to 0-255
+                g = byte & 0x1c; // mask out the 3 bits of green in the middle of the byte
+                g |= (g << 3) | (r >> 3); // extend limited 0-34 range to 0-255
+                b = byte & 0x03; // mask out the 2 bits of blue at the end of the byte
+                b |= b << 2; // extend 0-3 range to 0-15
+                b |= b << 4;
+            } else {
+                // 16-bit RGB565 (Little Endian assumed)
+                const word = view.getUint8(frameOffset + (i * 2)) << 8
+                | view.getUint8(frameOffset + (i * 2) + 1);
+
+                r = (word & 0xF800) >> 8;
+                g = (word & 0x07E0) >> 3;
+                b = (word & 0x001F) << 3;
+            }
+
+            const pxIdx = i * 4;
+            imageData.data[pxIdx]     = r;
+            imageData.data[pxIdx + 1] = g;
+            imageData.data[pxIdx + 2] = b;
+            imageData.data[pxIdx + 3] = 255;
+            //console.log(`Pixel ${i}: R=${r} G=${g} B=${b}`);
+        }
+
+        ctx.putImageData(imageData, 0, 0);
+    }
+</script>
+</body>
+</html>
