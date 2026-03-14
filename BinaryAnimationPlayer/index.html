@@ -78,11 +78,11 @@
 
     let animationTimer = null;
     let currentBuffer = null;
-    let meta = { w: 0, h: 0, frames: 0, bpp: 0 };
+    let meta = { headerSize: 0, w: 0, h: 0, frames: 0, bpp: 0 };
 
     speedSlider.oninput = () => {
         fpsVal.innerText = speedSlider.value;
-        if (currentBuffer) startAnimation(); // Restart with new speed
+        if (currentBuffer) startAnimation();
     };
 
     fileInput.onchange = async (e) => {
@@ -92,22 +92,34 @@
         const buffer = await file.arrayBuffer();
         const view = new DataView(buffer);
 
-        // Header Parsing
-        const w = view.getUint8(0);
-        const h = view.getUint8(1);
-        const frames = view.getUint8(2);
-        const reserved = view.getUint8(3);
-
-        const pixelsPerFrame = w * h;
+        const is332 = file.name.endsWith('.332');
         const is565 = file.name.endsWith('.565');
-        const bpp = is565 ? 2 : 1;
 
-        meta = { w, h, frames, bpp, view };
+        const isDeprecatedFormat = file.name.endsWith('.332') || file.name.endsWith('.565');
+        const filesignature = String.fromCharCode(
+            view.getUint8(0),
+            view.getUint8(1)
+        );
+        const filetype = String.fromCharCode(
+            view.getUint8(2),
+            view.getUint8(3)
+        );
+
+        const headerSize = isDeprecatedFormat ? 3 : 8;
+        const w = isDeprecatedFormat ? view.getUint8(0) : view.getUint16(4, true);
+        const h = isDeprecatedFormat ? view.getUint8(1) : view.getUint16(6, true);
+        const pixelsPerFrame = w * h;
+        const bpp = is565 || filetype === 'b2' ? 2 : 1;
+        const totalDataBytes = buffer.byteLength - headerSize;
+        const bytesPerFrame = pixelsPerFrame * bpp;
+        const frames = Math.floor(totalDataBytes / bytesPerFrame);
+
+        meta = {headerSize, w, h, frames, bpp, view };
         currentBuffer = view;
 
         status.innerHTML = `
             RES: ${w}x${h} | FRAMES: ${frames}<br>
-            MODE: ${bpp === 1 ? '8-bit RGB332' : '16-bit RGB565'}
+            MODE: ${isDeprecatedFormat ? 'Deprecated' : ''} ${bpp === 1 ? '8-bit RGB332' : '16-bit RGB565'}
         `;
 
         canvas.width = w;
@@ -131,11 +143,11 @@
     }
 
     function renderFrame(idx) {
-        const { w, h, frames, bpp, view } = meta;
+        const { headerSize, w, h, frames, bpp, view } = meta;
         const imageData = ctx.createImageData(w, h);
         const pixelsPerFrame = w * h;
-        idx = idx % frames; // Ensure frame index wraps around
-        const frameOffset = 3 + (idx * pixelsPerFrame * bpp);
+        idx = idx % frames;
+        const frameOffset = headerSize + (idx * pixelsPerFrame * bpp);
 
         for (let i = 0; i < pixelsPerFrame; i++) {
             let r, g, b;
@@ -152,7 +164,6 @@
                 b |= b << 2; // extend 0-3 range to 0-15
                 b |= b << 4;
             } else {
-                // 16-bit RGB565 (Little Endian assumed)
                 const word = view.getUint8(frameOffset + (i * 2)) << 8
                 | view.getUint8(frameOffset + (i * 2) + 1);
 
