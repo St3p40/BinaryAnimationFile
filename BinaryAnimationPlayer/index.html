@@ -95,7 +95,7 @@
         const is332 = file.name.endsWith('.332');
         const is565 = file.name.endsWith('.565');
 
-        const isDeprecatedFormat = file.name.endsWith('.332') || file.name.endsWith('.565');
+        const isDeprecatedFormat = is332 || is565;
         const filesignature = String.fromCharCode(
             view.getUint8(0),
             view.getUint8(1)
@@ -109,11 +109,15 @@
         const w = isDeprecatedFormat ? view.getUint8(0) : view.getUint16(4, true);
         const h = isDeprecatedFormat ? view.getUint8(1) : view.getUint16(6, true);
         const pixelsPerFrame = w * h;
-        const bpp = is565 || filetype === 'b2' ? 2 : 1;
+        const bpp = (is565 || filetype === 'b2') ? 2 : (is332 || filetype === 'b1') ? 1 : -1;
         const totalDataBytes = buffer.byteLength - headerSize;
         const bytesPerFrame = pixelsPerFrame * bpp;
         const frames = Math.floor(totalDataBytes / bytesPerFrame);
 
+        if ((!isDeprecatedFormat && !filesignature === 'bA') || bpp === -1) {
+            status.innerHTML = `<span style="color: #e74c3c;">Unsupported file format.</span>`;
+            return;
+        }
         meta = {headerSize, w, h, frames, bpp, view };
         currentBuffer = view;
 
